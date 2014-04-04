@@ -1,0 +1,473 @@
+/* Copyright 2009-2014 Baylor University, EUCOS Group.
+ * All rights reserved. Use of this source code is governed
+ * by the MIT license that can be found in the LICENSE file.
+ */
+
+/*!
+ * @file src/Datatypes/Group.h
+ * @author Timothy Renner <timothy_renner@baylor.edu>
+ * @author Douglas Moore  <douglas_moore1@baylor.edu>
+ *
+ * This file provides the implementation of the GaugeGroup class to represent a
+ * gauge group instance.
+ */
+#include <Datatypes/Group.h>
+
+#include <algorithm>
+#include <cassert>
+#include <iostream>
+
+namespace FF {
+	static std::tuple<int,size_t,size_t>
+	RootLengthMeta(const std::list<FF::State>& roots) {
+		int long_length = 0;
+		int den = roots.front().length_squared_denominator;
+		for (auto &root : roots) {
+			int num = root.length_squared_numerator;
+			if (num == 2 * den) {
+				long_length = num;
+				break;
+			} else if (num > long_length) {
+				long_length = num;
+			}
+		}
+	  size_t long_count =
+	  	std::count_if(std::begin(roots), std::end(roots),
+	  		[&] (const FF::State& root) {
+	  			return root.length_squared_numerator == long_length;
+	  		});
+		return std::make_tuple(long_length, long_count, roots.size() - long_count);
+	}
+
+	static double AClassRank(const std::list<FF::State>& roots) {
+	  return (-1 + sqrt(1 + 8 * roots.size()))/2;
+	}
+
+	static FF::State AddStates(const FF::State& alpha, const FF::State& beta,
+			const std::vector<size_t>& mode_vector) {
+		std::vector<int> numerator(alpha.numerator.size());
+		int denominator = alpha.denominator * beta.denominator;
+		size_t index = alpha.lm_size;
+		std::transform(std::begin(alpha.numerator) + alpha.lm_size,
+			std::end(alpha.numerator), std::begin(beta.numerator) + beta.lm_size,
+			std::begin(numerator) + alpha.lm_size,
+			[&] (int a, int b) {
+				auto c = a * beta.denominator + b * alpha.denominator;
+				if (mode_vector[index] < alpha.lm_size) {
+					while (abs(c) > denominator) {
+						c -= 2 * c * denominator / abs(c);
+					}
+				}
+				++index;
+				return c;
+			});
+		return {numerator, denominator};
+	}
+
+	static bool CompareStates(const FF::State* alpha,
+			const FF::State* beta) {
+		auto a = std::begin(alpha->numerator) + alpha->lm_size;
+		auto b = std::begin(beta->numerator) + beta->lm_size;
+		while (a != std::end(alpha->numerator)) {
+			if (*a * beta->denominator < *b * alpha->denominator) {
+				return true;
+			} else if (*a * beta->denominator > *b * alpha->denominator) {
+				return false;
+			}
+			++a;
+			++b;
+		}
+		return false;
+	}
+
+	static std::list<FF::State> FindSimpleRoots(
+			const std::list<FF::State>& roots,
+			const std::vector<size_t>& mode_vector) {
+
+	  typedef std::function<bool(const FF::State*, const FF::State*)> Compare;
+
+		std::map<const FF::State*, bool, Compare> nonsimple(CompareStates);
+
+	  for (auto& p : roots) {
+	    nonsimple[&p] = false;
+	  }
+
+	  for (auto p = std::begin(roots); p != std::end(roots); ++p) {
+	    for (auto q = std::next(p); q != std::end(roots); ++q) {
+	    	auto sum = AddStates(*p,*q, mode_vector);
+	      auto location = nonsimple.find(&sum);
+	
+	      if (location != std::end(nonsimple) && !location->second) {
+	        location->second = true;
+	      }
+	    }
+	  }
+
+	  std::list<FF::State> simple_roots;
+		for (auto& sroots : nonsimple) {
+			if (!sroots.second) {
+				simple_roots.push_back(*sroots.first);
+			}
+		}
+		return simple_roots;
+	}
+
+	static void OrderSimpleRoots(char cartan_class, const FF::ModeMap& mode_map,
+			std::list<FF::State>* simple_roots) {
+
+		size_t rank = simple_roots->size();
+
+		bool can_order = (cartan_class == 'A' && rank > 1) ||
+			(cartan_class == 'D') || (cartan_class == 'E' && rank == 6);
+
+		if (!can_order) return;
+
+		auto root = simple_roots->begin();
+		FF::State first_root;
+		std::vector<FF::State> special_roots;
+		
+		if (cartan_class == 'A') {
+			for (auto alpha = simple_roots->begin(); alpha != simple_roots->end();
+			     ++alpha) {
+				int connection_count = 0;
+				for (const auto& root2 : *simple_roots) {
+					if ((GaugeProduct(*alpha, root2, mode_map) != 0) &&
+						  (*alpha != root2)) {
+						++connection_count;
+					}
+				}
+				if (connection_count == 1) {
+					first_root = *alpha;
+					alpha = simple_roots->erase(alpha);
+					break;
+				}
+			}
+		} else {
+			for (auto alpha = simple_roots->begin(); alpha != simple_roots->end();
+			     ++alpha) {
+				int connection_count = 0;
+				for (const auto& root2 : *simple_roots) {
+				  if ((GaugeProduct(*alpha, root2, mode_map) != 0) &&
+				  		(*alpha != root2)) {
+					  special_roots.push_back(root2);
+						++connection_count;
+					}
+				}
+				if (connection_count == 3) {
+				  first_root = *alpha;
+					root = simple_roots->erase(alpha);
+					break;
+				} else {
+					special_roots.clear();
+				}
+			}
+		}
+	
+		std::list<FF::State> ordered_roots;
+		ordered_roots.push_back(first_root);
+	
+		for (size_t a = 0; a < special_roots.size(); ++a) {
+			bool is_connected = false;
+			for (const auto& root : *simple_roots) {
+				if (root != special_roots[a] &&
+						GaugeProduct(root, special_roots[a], mode_map)!=0) {
+					is_connected = true;
+					break;
+				}
+			}
+			if(!is_connected) {
+				auto root = std::find(simple_roots->begin(), simple_roots->end(),
+				    special_roots[a]);
+				ordered_roots.push_back(*root);
+				simple_roots->erase(root);
+			}
+		}
+	
+		for (const auto& ordered_root : ordered_roots) {
+			for (auto root = simple_roots->begin(); root != simple_roots->end();) {
+				if (GaugeProduct(ordered_root, *root, mode_map) != 0) {
+					ordered_roots.push_back(*root);
+					root = simple_roots->erase(root);
+				} else {
+					++root;
+				}
+			}
+		}
+		assert(simple_roots->empty());
+		simple_roots->swap(ordered_roots);
+	}
+
+	static char ResolveClass(const std::list<FF::State>& roots,
+			const std::list<FF::State>& simple_roots, size_t long_count,
+			size_t short_count) {
+
+		bool is_simply_laced = roots.size() == long_count;
+
+		if (is_simply_laced) {
+		  switch (roots.size()) {
+		    case 36 :
+		      return (simple_roots.size() == 6) ? 'E' : 'A';
+		    case 63 :
+		    	return 'E';
+		    case 120 :
+		      return (simple_roots.size() == 8) ? 'E' : 'A';
+		    case 210 :
+		      return (simple_roots.size() == 15) ? 'D' : 'A';
+		    default :
+		    	double a_rank = AClassRank(roots);
+		    	return (a_rank - static_cast<int>(a_rank) == 0) ? 'A' : 'D';
+		  };
+		}
+
+		switch(roots.size()) {
+			case 6  :
+		  	return 'G';
+		  case 24 :
+		    return 'F';
+		  default :
+		   	return (short_count <= long_count) ? 'B' : 'C';
+		};
+
+		return 'N';
+	}
+}
+
+FF::Group::Group(const FF::Group::Name& name,
+		const std::list<FF::State>& positive_roots,
+		const std::list<FF::State>& simple_roots) {
+
+  this->positive_roots = positive_roots;
+  this->name           = name;
+  this->simple_roots   = simple_roots;
+
+  weyl_vector = WeylVector(*this);
+}
+
+void FF::Group::Display() const {
+  name.Display();
+}
+
+void FF::Group::DisplayPositiveRoots() const {
+  std::cout << "Positive roots for this gauge group: ";
+  std::cout << positive_roots.size() << std::endl;
+
+  for (const auto& root : positive_roots) {
+    root.Display();
+  }
+}
+
+void FF::Group::Name::Display() const {
+  std::cout << *this;
+  std::cout << " | " << std::flush;
+}
+
+bool FF::IsD4(const FF::Group::Name& g) {
+  return g.cartan_class == 'D' && g.rank == 4;
+}
+
+bool FF::IsD4(const FF::Group& g) {
+  return FF::IsD4(g.name);
+}
+
+std::ostream& FF::operator<<(std::ostream& out, const FF::Group::Name& g) {
+  out << g.cartan_class << " " << g.rank << " " << g.level;
+  return out;
+}
+
+bool FF::operator==(const FF::Group::Name& g, const FF::Group::Name& h) {
+  return (g.cartan_class == h.cartan_class) && (g.rank == h.rank) &&
+    (g.level == h.level);
+}
+
+bool FF::operator<(const FF::Group::Name& g, const FF::Group::Name& h) {
+  if (g.cartan_class != h.cartan_class) {
+    return g.cartan_class < h.cartan_class;
+  } else if (g.rank != h.rank) {
+    return g.rank < h.rank;
+  }
+  return g.level < h.level;
+}
+
+bool FF::operator==(const FF::Group &g, const FF::Group& h) {
+  return g.name == h.name;
+}
+
+bool FF::operator< (const FF::Group &g, const FF::Group& h) {
+  return g.name < h.name;
+}
+
+bool FF::operator!=(const FF::Group &g, const FF::Group& h) {
+  return g != h;
+}
+
+bool FF::operator<=(const FF::Group &g, const FF::Group& h) {
+  return g == h || g < h;
+}
+
+bool FF::operator> (const FF::Group &g, const FF::Group& h) {
+  return !(g <= h);
+}
+
+bool FF::operator>=(const FF::Group &g, const FF::Group& h) {
+  return !(g < h);
+}
+
+FF::Group FF::IdentifyGroup(const std::list<FF::State>& roots,
+		const FF::ModeMap& mode_map) {
+
+	std::vector<size_t> mode_vector(roots.front().numerator.size());
+	for (auto& modes : mode_map) {
+		mode_vector[modes.first] = modes.second;
+		mode_vector[modes.second] = modes.first;
+	}
+
+	int long_length;
+	size_t long_count, short_count;
+	std::tie(long_length, long_count, short_count) = FF::RootLengthMeta(roots);
+
+	auto simple_roots = FindSimpleRoots(roots, mode_vector);
+	auto cartan_class =
+		ResolveClass(roots, simple_roots, long_count, short_count);
+
+	OrderSimpleRoots(cartan_class, mode_map, &simple_roots);
+
+	size_t rank = simple_roots.size();
+	size_t level = (2 * pow(roots.front().denominator, 2)) / long_length;
+
+	return {{cartan_class, rank, level}, roots, simple_roots};
+}
+
+FF::State FF::WeylVector(const FF::Group& group) {
+  auto& root = group.positive_roots.front();
+
+	auto weyl_vector =
+		FF::State(std::vector<int>(root.numerator.size(),0), root.denominator);
+
+  for (auto& root : group.positive_roots) {
+  	for (size_t i = 0; i < weyl_vector.numerator.size(); ++i) {
+  		weyl_vector.numerator[i] += root.numerator[i];
+  	}
+  }
+
+  return weyl_vector;
+}
+
+int FF::Dimension(const FF::State& weight, const FF::Group& group,
+		const FF::ModeMap& mode_map) {
+
+  long double dimension{1};
+  long double numerator{1};
+  long double denominator{1};
+
+	int weyl_dot, weight_dot;
+  for (auto& root : group.positive_roots) {
+    weyl_dot = GaugeProduct(group.weyl_vector, root, mode_map);
+    weight_dot = GaugeProduct(weight, root, mode_map);
+
+    // 2 is for the denominator of the Weyl vector.
+    auto old_numerator = numerator;
+    numerator   *= (weyl_dot + (2 * weight_dot));
+    denominator *= weyl_dot;
+
+    dimension = numerator / denominator;
+    
+    if (dimension - int(dimension) == 0) {
+      numerator   = dimension;
+      denominator = 1;
+    }
+
+    if (!dimension) {
+      return 0;
+    }
+  }
+
+	// assert(dimension > 0);
+	// assert(dimension == static_cast<int>(dimension));
+
+  return static_cast<int>(dimension);
+}
+
+char FF::ComputeTriality(const FF::DynkinLabels& dynkin_labels,
+		const FF::Group& group) {
+  return (IsD4(group) && dynkin_labels.at(3) != 0) ? 'v' : ' ';
+}
+
+bool FF::NotHighestWeight(const FF::DynkinLabels& dynkin_labels,
+		const FF::Group& group) {
+	if (dynkin_labels.size() < group.name.rank)
+    return false;
+
+  return std::any_of(std::begin(dynkin_labels), std::end(dynkin_labels),
+  	[] (int x) { return x < 0; });
+}
+
+std::tuple<bool,bool> FF::IsBarred(const FF::DynkinLabels& dynkin_labels,
+    const FF::Group& group) {
+  std::vector<int> reversed_dynkin_labels = dynkin_labels;
+  if (group.name.cartan_class == 'A' && group.name.rank > 1) {
+    std::reverse(reversed_dynkin_labels.begin(), reversed_dynkin_labels.end());
+  } else if (group.name.cartan_class == 'D') {
+    reversed_dynkin_labels.at(1) = dynkin_labels.at(2);
+    reversed_dynkin_labels.at(2) = dynkin_labels.at(1);
+  } else if (group.name.cartan_class == 'E' && group.name.rank == 6) {
+  	reversed_dynkin_labels.at(2) = dynkin_labels.at(3);
+  	reversed_dynkin_labels.at(3) = dynkin_labels.at(2);
+  	reversed_dynkin_labels.at(4) = dynkin_labels.at(5);
+  	reversed_dynkin_labels.at(5) = dynkin_labels.at(4);
+  }
+
+  bool is_complex = dynkin_labels != reversed_dynkin_labels;
+  bool is_barred  = dynkin_labels < reversed_dynkin_labels;
+
+  return std::make_tuple(is_complex,is_barred);
+}
+
+FF::DynkinLabels FF::ComputeDynkinLabels(const FF::State& weight,
+    const FF::Group& group, const FF::ModeMap& mode_map) {
+  FF::DynkinLabels labels;
+  for (auto& simple_root : group.simple_roots) {
+    labels.push_back(GaugeProduct(weight, simple_root, mode_map));
+  }
+  return labels;
+}
+
+FF::Representation FF::ComputeRepresentation(const FF::State& weight,
+    const FF::ModeMap& mode_map, FF::Group& group) {
+  auto label = ComputeDynkinLabels(weight, group, mode_map);
+  auto labels = group.dynkin_labels.find(label);
+  int dimension = 0;
+
+  if (NotHighestWeight(label, group)) {
+    return FF::Representation(dimension,' ');
+  }
+
+  //First, see if it's been mapped.
+  if (labels != group.dynkin_labels.end()) {
+    return labels->second;
+  } else {
+    dimension = Dimension(weight, group, mode_map);
+  }
+
+  //Now make sure it's a highest weight.
+  if (!dimension) {
+    return FF::Representation(dimension, ' ');
+  }
+
+	bool is_complex, is_barred;
+	std::tie(is_complex,is_barred) = IsBarred(label, group);
+		
+	if (is_complex) {
+		group.complex_dimensions.insert(dimension);
+	}
+
+	if (is_barred) {
+		dimension *= -1;
+	}
+
+	char triality = ComputeTriality(label, group);
+
+	group.dynkin_labels[label] =
+		FF::Representation(dimension, triality, is_complex);
+
+	return group.dynkin_labels[label];
+}

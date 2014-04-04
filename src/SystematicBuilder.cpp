@@ -1,0 +1,315 @@
+#include "SystematicBuilder.h"
+
+SystematicBuilder::SystematicBuilder(const ModelBuilder& Initial_Build,
+				       int Large_ST_Dimensions, 
+				       const std::vector<int>& Extension_Orders, 
+				       const std::string& Output_File_Name)
+{
+  Initial_Model_ = Initial_Build.FFHS_Model();
+  Initial_Common_Basis_Alphas_ = Initial_Build.Common_Basis_Alphas();
+  Large_ST_Dimensions_ = Large_ST_Dimensions;
+  Simply_Paired_Layers_ = std::vector<bool>(Extension_Orders.size(), true);
+  Extension_Orders_ = Extension_Orders;
+  Consistent_Models_ = 0;
+  Consistent_BVs_ = 0;
+  Total_BVs_ = 0;
+
+  Model_Out_.open(Output_File_Name.c_str());
+  MD_Out_.open((Output_File_Name + "MD").c_str());
+
+  OutputWriter New_OutputWriter;
+  Data_Writer_ = New_OutputWriter;
+}//Close second constructor.
+
+SystematicBuilder::SystematicBuilder(const ModelBuilder& Initial_Build,
+				       int Large_ST_Dimensions, 
+				       const std::vector<int>& Extension_Orders,
+				       const std::string& Output_File_Name,
+				       std::vector<bool> Simply_Paired_Layers)
+{
+  Initial_Model_ = Initial_Build.FFHS_Model();
+  Initial_Common_Basis_Alphas_ = Initial_Build.Common_Basis_Alphas();
+  Large_ST_Dimensions_ = Large_ST_Dimensions;
+  Simply_Paired_Layers_ = Simply_Paired_Layers;
+  Extension_Orders_ = Extension_Orders;
+  Consistent_Models_ = 0;
+  Consistent_BVs_ = 0;
+  Total_BVs_ = 0;
+
+  Model_Out_.open(Output_File_Name.c_str());
+  MD_Out_.open((Output_File_Name+"MD").c_str());
+
+  OutputWriter New_OutputWriter;
+  Data_Writer_ = New_OutputWriter;
+}//Close third constructor.
+
+SystematicBuilder::SystematicBuilder(const SystematicBuilder& 
+				       New_SystematicBuilder)
+{
+  Initial_Model_ = New_SystematicBuilder.Initial_Model();
+  Extension_Orders_ = New_SystematicBuilder.Extension_Orders();
+  Initial_Common_Basis_Alphas_ = 
+    New_SystematicBuilder.Initial_Common_Basis_Alphas();
+  Large_ST_Dimensions_ = New_SystematicBuilder.Large_ST_Dimensions();
+  Simply_Paired_Layers_ = New_SystematicBuilder.Simply_Paired_Layers();
+  Consistent_Models_ = New_SystematicBuilder.Consistent_Models();
+  Consistent_BVs_ = New_SystematicBuilder.Consistent_BVs();
+  Total_BVs_ = New_SystematicBuilder.Total_BVs();
+  Unique_LEEFTs_ = New_SystematicBuilder.Unique_LEEFTs();
+  k_ij_Extensions_ = New_SystematicBuilder.k_ij_Extensions();
+}//Close copy constructor.
+
+//INTERFACE.
+void SystematicBuilder::Perform_Search()
+{
+  Data_Writer_.Write_BV_Search_Front_Info(Model_Out_, Initial_Model(), 
+					  Large_ST_Dimensions(),
+	    				  Extension_Orders());
+  if(k_ij_Extensions().size() == 0)//In case the user wants k_ij fixed.
+    Build_k_ij_Extensions();
+
+  std::vector<BasisVector> Basis_Vectors(Extension_Orders().size(),
+					  BasisVector());
+  double Start_Time = clock();
+  Build_Extensions(0, Basis_Vectors);
+  double Finish_Time = clock();
+  double Total_Time = (Finish_Time - Start_Time)/double(CLOCKS_PER_SEC);
+  Write_End_MD(Total_Time);
+}//Close Perform_Search.
+
+//DEBUG.
+void SystematicBuilder::Display_k_ij_Extensions() const 
+{
+  std::list<std::vector<std::vector<int> > >::const_iterator itk_ij_Extensions = 
+    k_ij_Extensions_.begin();
+  std::list<std::vector<std::vector<int> > >::const_iterator itk_ij_Extensions_End = 
+    k_ij_Extensions_.end();
+  std::cout<<"k_ij extensions: "<<k_ij_Extensions().size()<<std::endl;
+  for(; itk_ij_Extensions != itk_ij_Extensions_End; 
+      ++itk_ij_Extensions)
+    {
+      for(int a=0; a<static_cast<int>(itk_ij_Extensions->size()); ++a)
+	{
+	  for(int b=0; b<static_cast<int>(itk_ij_Extensions->at(a).size()); ++b)
+	    std::cout<<itk_ij_Extensions->at(a).at(b)<<" ";
+	  std::cout<<std::endl;
+	}//Close inner for loop on k_ij_Extensions.
+      std::cout<<std::endl;
+    }//Close outer for loop on k_ij_Extensions.
+}//Close Display_k_ij_Extensions.
+
+//PRIVATE.
+//HELPERS.
+void SystematicBuilder::Build_k_ij_Extensions()
+{
+  //Put all of the orders into one vector.
+  std::vector<int> Orders;
+  for(int a=0; a<static_cast<int>(Initial_Model().BV_Set().size()); ++a)
+    Orders.push_back(Initial_Model().BV_Set().at(a).Order());
+
+  //Get the k_ij extensions for each layer.
+  std::vector<std::list<std::vector<int> > > k_ij_Layer_Extensions;
+  for(int a=0; a<static_cast<int>(Extension_Orders().size()); ++a)
+    {
+      Orders.push_back(Extension_Orders().at(a));
+      GSOCoefficientMatrixGenerator k_ij_Generator
+	(Orders, a);
+      k_ij_Generator.Build_GSO_Coefficient_Extensions();
+
+      k_ij_Layer_Extensions.push_back
+	(k_ij_Generator.GSO_Coefficient_Matrix_Extensions());
+    }//Close for loop on Extension_Orders.
+
+  //Form them into sets recursively.
+  std::vector<std::vector<int> > k_ij_Extension(Extension_Orders().size(),
+						std::vector<int>(0,0));
+  Form_k_ij_Layer_Extensions(k_ij_Layer_Extensions, 0, k_ij_Extension);
+}//Close Build_k_ij_Extensions.
+
+void SystematicBuilder::Form_k_ij_Layer_Extensions
+(const std::vector<std::list<std::vector<int> > >& k_ij_Layer_Extensions, 
+ int Layer, std::vector<std::vector<int> > k_ij_Extension)
+{
+  if(Layer<static_cast<int>(Extension_Orders().size()))
+    {
+      std::list<std::vector<int> > k_ij_Layer = k_ij_Layer_Extensions.at(Layer);
+      std::list<std::vector<int> >::iterator itk_ij_Layer = k_ij_Layer.begin();
+      std::list<std::vector<int> >::iterator itk_ij_Layer_End = 
+	k_ij_Layer.end();
+      for(; itk_ij_Layer != itk_ij_Layer_End; ++itk_ij_Layer)
+	{
+	  k_ij_Extension.at(Layer) = *itk_ij_Layer;
+	  Form_k_ij_Layer_Extensions(k_ij_Layer_Extensions, Layer+1, k_ij_Extension);
+	}//Close for loop on k_ij_Layer.
+    }else
+    k_ij_Extensions_.push_back(k_ij_Extension);
+}//Close Form_k_ij_Extensions.
+
+void SystematicBuilder::Build_Extensions(int Layer, std::vector<BasisVector>
+						  Basis_Vectors)
+{
+  if(Layer<static_cast<int>(Extension_Orders().size()))
+    Build_Basis_Vectors(Layer, Basis_Vectors);
+  else
+    Build_Models(Basis_Vectors);
+}//Close Build_Extensions.
+
+ void SystematicBuilder::Build_Basis_Vectors(int Layer, 
+						     std::vector<BasisVector> 
+						     Basis_Vectors)
+{
+  MIBVGenerator BV_Generator(Extension_Orders().at(Layer), Large_ST_Dimensions());
+  if(Layer == 0)
+  BV_Generator.Build_Full_Chunks(Initial_Common_Basis_Alphas());
+  else
+    {
+      std::vector<BasisVector> All_Basis_Vectors = Initial_Model().BV_Set();
+      for(int a=0; a<Layer; ++a)
+	All_Basis_Vectors.push_back(Basis_Vectors.at(a));
+      BasisAlphaBuilder BA_Builder(All_Basis_Vectors);
+      BA_Builder.Build_Basis_Alphas();
+      BA_Builder.Build_Common_Basis_Alphas();
+      BV_Generator.Build_Full_Chunks(BA_Builder.Common_Basis_Alphas());
+    }
+ 
+  std::list<Chunk> LMs;
+  if(Simply_Paired_Layers().at(Layer))
+    LMs = BV_Generator.SP_LMs();
+  else
+    LMs = BV_Generator.NSP_LMs();
+
+  std::list<Chunk> Comp;
+  if(Simply_Paired_Layers().at(Layer))
+    Comp = BV_Generator.SP_RMs_Compact();
+  else
+    Comp = BV_Generator.NSP_RMs_Compact();
+
+  std::list<Chunk> Obs = BV_Generator.RMs_Observable();
+  std::list<Chunk> Hid = BV_Generator.RMs_Hidden();
+
+  std::list<Chunk>::iterator itLMs = LMs.begin();
+  std::list<Chunk>::iterator itObs = Obs.begin();
+  std::list<Chunk>::iterator itComp = Comp.begin();
+  std::list<Chunk>::iterator itHid = Hid.begin();
+
+  std::list<Chunk>::iterator itLMs_End = LMs.end();
+  std::list<Chunk>::iterator itObs_End = Obs.end();
+  std::list<Chunk>::iterator itComp_End = Comp.end();
+  std::list<Chunk>::iterator itHid_End = Hid.end();
+
+  Total_BVs_ += LMs.size()*Obs.size()*Comp.size()*Hid.size();
+
+  ChunkConsistencyChecker Checker(FF::LCM(2, Extension_Orders().at(Layer)),
+				    Initial_Common_Basis_Alphas().at(0).
+				    Denominator());
+
+  for(; itLMs != itLMs_End; ++itLMs)
+    {
+      for(itComp = Comp.begin(); itComp != itComp_End; ++itComp)
+	{
+	  for(itObs = Obs.begin(); itObs != itObs_End; ++itObs)
+	    {
+	      //Make sure the pairings are good before proceeding.
+	      if(!Simply_Paired_Layers().at(Layer) && 
+		 !Checker.Check_Simultaneous_Periodic_Modes(*itLMs, *itComp))
+		break;
+
+	      for(itHid = Hid.begin(); itHid != itHid_End; ++itHid)
+		{
+		  if(Checker.Check_Modular_Invariance(*itLMs, *itObs, 
+						      *itComp, *itHid))
+		    {
+		      std::vector<int> New_BV;
+		      for(int a=0; a<static_cast<int>(itLMs->BV_Chunk().size()); ++a)
+			New_BV.push_back(itLMs->BV_Chunk().at(a));
+		      for(int a=0; a<static_cast<int>(itObs->BV_Chunk().size()); ++a)
+			New_BV.push_back(itObs->BV_Chunk().at(a));
+		      for(int a=0; a<static_cast<int>(itComp->BV_Chunk().size()); ++a)
+			New_BV.push_back(itComp->BV_Chunk().at(a));
+		      for(int a=0; a<static_cast<int>(itHid->BV_Chunk().size()); ++a)
+			New_BV.push_back(itHid->BV_Chunk().at(a));
+
+		      Basis_Vectors.at(Layer) = 
+			(BasisVector(New_BV, Extension_Orders().at(Layer),
+				      Large_ST_Dimensions()));
+		      if(Layer == static_cast<int>(Extension_Orders().size())-1)
+			Consistent_BVs_++;
+		      Build_Extensions(Layer+1, Basis_Vectors);
+		    }//Close if statement on modular invariance.
+		}//Close for loop on itHid.
+	    }//Close for loop on itObs.
+	}//Close for loop on itComp.
+    }//Close for loop on itLMs.
+}//Close Build_Basis_Vectors.
+
+ void SystematicBuilder::Build_Models(std::vector<BasisVector> Basis_Vectors)
+{
+  bool Linear_Independence_Checked = false;
+  std::list<std::vector<std::vector<int> > >::const_iterator itk_ij_Extensions = 
+    k_ij_Extensions_.begin();
+  std::list<std::vector<std::vector<int> > >::const_iterator itk_ij_Extensions_End = 
+    k_ij_Extensions_.end();
+  for(; itk_ij_Extensions != itk_ij_Extensions_End;
+      ++itk_ij_Extensions)
+    {
+      ModelBuilder The_Builder(Large_ST_Dimensions());
+      //Load the initial BVs first.
+      for(int b=1; b<static_cast<int>(Initial_Model().BV_Set().size()); ++b)
+	  The_Builder.Load_Basis_Vector(Initial_Model().BV_Set().at(b));
+
+      //Load the extension BVs.
+      for(int b=0; b<static_cast<int>(Basis_Vectors.size()); ++b)
+	The_Builder.Load_Basis_Vector(Basis_Vectors.at(b));
+
+    
+      //Check for linear independence.
+      if(!Linear_Independence_Checked)
+	{
+	  if(!The_Builder.Check_Linear_Independence())
+	    break;
+	  else
+	    Linear_Independence_Checked = true;
+	}
+
+      //Load the initial k_ijs.
+      for(int b=0; b<static_cast<int>(Initial_Model().k_ij().Numerators().size()); ++b)
+	The_Builder.Load_k_ij_Row(Initial_Model().k_ij().Numerators().at(b));
+
+      //Load the extension k_ijs.
+      for(int b=0; b<static_cast<int>(itk_ij_Extensions->size()); ++b)
+	The_Builder.Load_k_ij_Row(itk_ij_Extensions->at(b));
+
+      //Check the consistency of the k_ij matrix.
+      if(The_Builder.Check_k_ij_Consistency())
+	{
+	  The_Builder.Build_Model();
+	  int Previous_Unique_Model_Count = Unique_LEEFTs().size();
+	  Unique_LEEFTs_.insert(LEEFT(The_Builder.FFHS_Model()));
+	  Consistent_Models_++;
+	  if(static_cast<int>(Unique_LEEFTs().size()) > Previous_Unique_Model_Count)
+	    {
+	      MD_Out_<<Consistent_Models()<<" "<<Unique_LEEFTs().size()<<std::endl;
+	      Data_Writer_.Write_Model_Particle_Content(Model_Out_,
+						       The_Builder.FFHS_Model());
+	      Model_Out_<<std::endl;
+	      Data_Writer_.Write_Model_Extension_BVs(Model_Out_, 
+						    The_Builder.FFHS_Model(),
+						    Extension_Orders().size());
+	      Data_Writer_.Write_Model_Extension_k_ij(Model_Out_, 
+						      *itk_ij_Extensions);
+	      Model_Out_<<std::endl;
+	    }//Close if statement on unique LEEFTs.
+	}//Close if statement on k_ij consistency.
+    }//Close for loop on k_ij extensions.
+}//Close Build_Models.
+
+void SystematicBuilder::Write_End_MD(double Total_Time)
+{
+  Model_Out_<<"Total unique models: "<<Unique_LEEFTs().size()<<std::endl;
+  Model_Out_<<"Total consistent models: "<<Consistent_Models()<<std::endl;
+  Model_Out_<<"Total consistent BVs: "<<Consistent_BVs()<<std::endl;
+  Model_Out_<<"Total BVs tested: "<<Total_BVs()<<std::endl;
+  double Models_Per_Sec = double(Consistent_Models())/Total_Time;
+  Model_Out_<<"Total time: "<<Total_Time<<std::endl;
+  Model_Out_<<"Models built per sec: "<<Models_Per_Sec<<std::endl;
+}//Close Write_End_MD.

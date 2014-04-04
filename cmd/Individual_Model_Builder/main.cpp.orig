@@ -1,0 +1,60 @@
+/*
+Author: Timothy Renner (renner.timothy@gmail.com)
+Date: 10/27/2010
+Baylor University
+
+This program builds individual models and outputs the basis vectors,
+k_ij matrix, and particle content to a LaTeX file.
+
+Uses the FF Framework.
+*/
+
+#include <iostream>
+
+#include <Datatypes/LEEFT.h>
+#include <ModelBuilder.h>
+
+int main()
+{
+  const int D = 4;
+  FF::BasisVector alpha =
+  	 {{0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+  	  1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+  	  1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}, 4};
+
+	auto mi = IsModularInvariant(FF::BuildBasisAlphas({alpha}));
+	std::cout << std::boolalpha << mi << std::endl;
+
+	std::list<std::vector<int>> susy_gsos  = {{0},{1}};
+	std::list<std::vector<int>> alpha_gsos = {{0,0},{0,1},{1,0},{1,1}};
+	
+  for (auto susy_row : susy_gsos) {
+    for (auto alpha_row : alpha_gsos) {
+      FF::ModelBuilder model_builder(D);
+    	model_builder.Load_S_Vector(D);
+    	model_builder.Load_k_ij_Row({0});
+    	model_builder.Load_k_ij_Row(susy_row);
+    	model_builder.Load_Basis_Vector(alpha);
+    	model_builder.Load_k_ij_Row(alpha_row);
+
+      if (!model_builder.Check_Modular_Invariance()) {
+        std::cout << "Not modular invariant" << std::endl;
+      }
+
+      if (!model_builder.Check_Linear_Independence()) {
+        std::cout << "Not linearly independent." << std::endl;
+      }
+
+      if (!model_builder.Check_k_ij_Consistency()) {
+        std::cout << "GSO matrix inconsistent" << std::endl;
+      }
+    
+      model_builder.Build_Model();
+      model_builder.model.DisplayParticleContent();
+      std::cout << std::endl;
+      model_builder.model.DisplayGSOMatrix();
+      std::cout << std::endl;
+    }
+  }
+  return 0;
+}

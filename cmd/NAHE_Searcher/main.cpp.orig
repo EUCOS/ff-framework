@@ -1,0 +1,91 @@
+#include <vector>
+#include <set>
+#include <string>
+#include <iostream>
+#include <cstdlib>
+
+#include "SystematicBuilder.h"
+#include "SystematicGaugeBuilder.h"
+#include "ModelBuilder.h"
+
+using namespace std;
+
+string Make_Output_File_Name(string Base_Output_File_Name, 
+			     vector<int> Extension_Orders, vector<bool>
+			     Simply_Paired_Layers);
+
+int main(int argc, char* argv[])
+{
+  if(argc == 1)
+    {
+      cout<<"Add an order or orders to specify search parameters."<<endl;
+      return 0;
+    }//Close if statement on proper number of arguments.
+
+  int Large_ST_Dimensions = 4;
+  string Kodiak = "/data/moored/nahe-test/";
+  string Base_Output_File_Name = "NAHE";
+  Base_Output_File_Name = Kodiak+Base_Output_File_Name;
+  vector<int> Extension_Orders;
+  vector<bool> Simply_Paired_Layers;
+
+
+  for(int a=1; a<argc; ++a)
+    Extension_Orders.push_back(atoi(argv[a]));
+
+  for(int a=1; a<argc; ++a)
+    {
+      if(Extension_Orders.at(a-1)<10&&argv[a][1] == 'n')
+	Simply_Paired_Layers.push_back(false);
+      else if(Extension_Orders.at(a-1)>=10&&argv[a][2] == 'n')
+	Simply_Paired_Layers.push_back(false);
+      else
+	Simply_Paired_Layers.push_back(true);
+    }
+
+  string Output_File_Name = Make_Output_File_Name(Base_Output_File_Name, 
+						  Extension_Orders, 
+						  Simply_Paired_Layers);
+
+  cout<<"Output_File_Name: "<<Output_File_Name<<endl;
+
+  ModelBuilder Initial_Conditions(Large_ST_Dimensions);
+  Initial_Conditions.Load_S_Vector(Large_ST_Dimensions);
+  Initial_Conditions.Load_NAHE_Set();
+
+  GSOMatrix Initial_k_ij = Initial_Conditions.FFHS_Model().gso_matrix;
+
+  if(!Initial_Conditions.Check_Model_Consistency())
+    {
+      cout<<"Bad initial list."<<endl;
+      return 0;
+    }//Close if statement on model consistency.
+
+  Initial_Conditions.rFFHS_Model().gso_matrix = Initial_k_ij;
+
+  SystematicBuilder Bob_The_Builder(Initial_Conditions, Large_ST_Dimensions,
+				     Extension_Orders, Output_File_Name,
+			Simply_Paired_Layers);
+  Bob_The_Builder.Perform_Search();
+  //Bob_The_Builder.Display_k_ij_Extensions();
+
+  cout<<"Search finished."<<endl;
+  return 0;
+}//Close main.
+
+string Make_Output_File_Name(string Base_Output_File_Name, 
+			     vector<int> Extension_Orders, vector<bool>
+			     Simply_Paired_Layers)
+{
+  stringstream ss;
+  ss<<Base_Output_File_Name;
+  for(size_t a=0; a<Extension_Orders.size(); ++a)
+    {
+      ss<<"_O"<<Extension_Orders.at(a);
+      ss<<"_L"<<(a+1);
+      if(!Simply_Paired_Layers.at(a))
+	ss<<"_NSP";
+    }
+  ss<<".txt";
+  return ss.str();
+}//Close Make_Output_File_Name.
