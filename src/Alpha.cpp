@@ -13,6 +13,7 @@ Alpha::Alpha(const Alpha& New_Alpha):BasisAlpha(New_Alpha)
 }//Close copy constructor.
 
 //INTERFACE.
+//just a test of push
 int Alpha::Mass_Left()
 {
   int Mass_Left = 0;

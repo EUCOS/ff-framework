@@ -7,7 +7,7 @@ BasisAlpha::BasisAlpha(const std::vector<int>& Numerator,
   Denominator_ = Denominator;
 
   Calculate_LM_Size();
-  Calculate_RM_Compact_Size();
+ Calculate_RM_Compact_Size();
 }// Close constructor.
 
 BasisAlpha::BasisAlpha(const std::vector<int>& Numerator, 
