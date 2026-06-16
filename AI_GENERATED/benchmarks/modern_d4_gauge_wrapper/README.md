@@ -25,4 +25,9 @@ g++ -Wall -pedantic -g -pg \
   lib/libff.a \
   -o AI_GENERATED/benchmarks/modern_d4_gauge_wrapper/D4_Gauge_Searcher_Modern
 ./AI_GENERATED/benchmarks/modern_d4_gauge_wrapper/D4_Gauge_Searcher_Modern 2
-pwd
+
+## Run small test
+
+```bash
+./AI_GENERATED/benchmarks/modern_d4_gauge_wrapper/D4_Gauge_Searcher_Modern 2
+```text id="c1dd98"
